@@ -99,6 +99,96 @@ See `src/test/java/net/mcfarb/mockapi/service/UserServiceTest.java` for a comple
 mvn test
 ```
 
+## Fallback to Real Endpoints
+
+The mock-api supports automatic fallback to real endpoints when no mock configuration is found. This is useful for:
+- Partial mocking (mock some endpoints, proxy others to real services)
+- Development environments where some services are mocked and others are real
+- Testing scenarios where you want to mix mocked and real responses
+
+### Configuring Fallback
+
+Add the following to your `application.properties`:
+
+```properties
+# Enable fallback functionality
+mock.api.fallback.enabled=true
+
+# Global fallback base URL (applies to all controllers by default)
+mock.api.fallback.base-url=http://localhost:9090
+
+# Optional: Timeout for fallback requests (default: 30000ms)
+mock.api.fallback.timeout-ms=30000
+
+# Optional: Forward request headers to fallback endpoint (default: true)
+mock.api.fallback.forward-headers=true
+```
+
+### Per-Controller Fallback URLs
+
+You can configure different fallback URLs for each controller:
+
+```properties
+# Enable fallback
+mock.api.fallback.enabled=true
+
+# Default fallback URL
+mock.api.fallback.base-url=http://localhost:9090
+
+# Override fallback URL for specific controllers
+mock.api.controllers.user.fallback-url=http://localhost:9091
+mock.api.controllers.product.fallback-url=http://localhost:9092
+```
+
+### Fallback Priority
+
+The system determines the fallback URL using the following priority:
+
+1. **Code-based override**: Controller overrides `getFallbackUrl()` method
+2. **Configuration-based controller-specific**: `mock.api.controllers.{name}.fallback-url`
+3. **Global configuration**: `mock.api.fallback.base-url`
+
+### Example: Code-Based Fallback Override
+
+```java
+@RestController
+@RequestMapping("/api/user")
+public class UserController extends BaseRestController {
+
+    @Override
+    protected String getBasePath() {
+        return "api/user";
+    }
+
+    @Override
+    protected String getConfigFileName() {
+        return "user";
+    }
+
+    @Override
+    protected String getFallbackUrl() {
+        // Override fallback URL for this controller
+        return "http://user-service.example.com";
+    }
+}
+```
+
+### How Fallback Works
+
+1. Request comes to a controller endpoint (e.g., `GET /api/user/123`)
+2. System checks for matching mock configuration
+3. If mock found → return mocked response
+4. If no mock found and fallback enabled → proxy request to fallback URL
+5. If no mock found and fallback disabled → return 404
+
+### Fallback Features
+
+- **Method preservation**: Proxies the same HTTP method (GET, POST, PUT, etc.)
+- **Query parameters**: Forwards all query parameters to the fallback endpoint
+- **Request headers**: Optionally forwards headers (configurable)
+- **Request body**: Forwards body for POST/PUT/PATCH requests
+- **Error handling**: Returns 502 Bad Gateway if fallback endpoint fails
+
 ## Project Structure
 
 ```

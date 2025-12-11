@@ -73,10 +73,11 @@ public class ProductControllerTest {
 				.expectStatus().isOk()
 				.expectBody()
 				.jsonPath("$").isArray()
-				.jsonPath("$.length()").isEqualTo(3)
+				.jsonPath("$.length()").isEqualTo(4)
 				.jsonPath("$[0].inStock").isEqualTo(true)
 				.jsonPath("$[1].inStock").isEqualTo(true)
-				.jsonPath("$[2].inStock").isEqualTo(true);
+				.jsonPath("$[2].inStock").isEqualTo(true)
+				.jsonPath("$[3].inStock").isEqualTo(true);
 	}
 
 	@Test

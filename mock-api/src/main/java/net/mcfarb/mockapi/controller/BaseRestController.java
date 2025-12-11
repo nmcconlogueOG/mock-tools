@@ -6,13 +6,16 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.util.MultiValueMap;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.reactive.function.client.WebClient;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -20,6 +23,7 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import net.mcfarb.mockapi.config.MockApiConfiguration;
 import net.mcfarb.testing.ddmock.model.MockRestGeneratorInfo;
 import net.mcfarb.testing.ddmock.model.MockRestMethodInfo;
 import net.mcfarb.testing.ddmock.service.JsonProcessor;
@@ -42,6 +46,12 @@ public abstract class BaseRestController {
 	protected MockRestProvider mockRestProvider;
 	private JsonProcessor jsonProcessor;
 
+	@Autowired(required = false)
+	private MockApiConfiguration mockApiConfiguration;
+
+	@Autowired(required = false)
+	private WebClient webClient;
+
 	/**
 	 * Returns the base path prefix that this controller handles.
 	 * For example: "api/user" or "api/product"
@@ -56,6 +66,28 @@ public abstract class BaseRestController {
 	 * For example: "user" will load from mockdata/user.json
 	 */
 	protected abstract String getConfigFileName();
+
+	/**
+	 * Returns the controller name used for configuration lookups.
+	 * By default, uses the config file name.
+	 * Override if you want a different name for configuration purposes.
+	 *
+	 * @return The controller name (e.g., "user", "product")
+	 */
+	protected String getControllerName() {
+		return getConfigFileName();
+	}
+
+	/**
+	 * Returns the fallback base URL for this controller.
+	 * If not overridden, uses the global fallback URL from configuration.
+	 * Override this method to provide controller-specific fallback URLs.
+	 *
+	 * @return The fallback base URL, or null to use the global configuration
+	 */
+	protected String getFallbackUrl() {
+		return null; // Use global configuration by default
+	}
 
 	/**
 	 * Initializes the MockRestProvider with the controller's specific configuration.
@@ -114,7 +146,8 @@ public abstract class BaseRestController {
 	})
 	public Mono<ResponseEntity<Object>> handleRequest(
 			ServerHttpRequest request,
-			@RequestParam(required = false) MultiValueMap<String, String> queryParams) {
+			@RequestParam(required = false) MultiValueMap<String, String> queryParams,
+			@RequestBody(required = false) String requestBody) {
 
 		String requestPath = request.getURI().getPath();
 		String httpMethod = request.getMethod().name();
@@ -136,6 +169,13 @@ public abstract class BaseRestController {
 
 		if (methodInfo == null) {
 			log.warn("[{}] No mock configuration found for: {} {}", getBasePath(), httpMethod, requestPath);
+
+			// Try fallback if enabled
+			if (isFallbackEnabled()) {
+				return proxyToFallback(request, requestPath, httpMethod, queryParams, requestBody);
+			}
+
+			// No fallback - return 404
 			return Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND)
 					.body(Map.of(
 							"error", "No mock configuration found for this endpoint",
@@ -177,5 +217,94 @@ public abstract class BaseRestController {
 			basePath = "/" + basePath;
 		}
 		return requestPath.startsWith(basePath);
+	}
+
+	/**
+	 * Checks if fallback is enabled and a fallback URL is configured.
+	 */
+	private boolean isFallbackEnabled() {
+		if (mockApiConfiguration == null || webClient == null) {
+			return false;
+		}
+		String fallbackUrl = getEffectiveFallbackUrl();
+		return mockApiConfiguration.getFallback().isEnabled() && fallbackUrl != null && !fallbackUrl.isEmpty();
+	}
+
+	/**
+	 * Gets the effective fallback URL with the following priority:
+	 * 1. Code-based override from getFallbackUrl()
+	 * 2. Configuration-based controller-specific URL
+	 * 3. Global fallback base URL
+	 */
+	private String getEffectiveFallbackUrl() {
+		// Priority 1: Code-based override
+		String codeFallbackUrl = getFallbackUrl();
+		if (codeFallbackUrl != null && !codeFallbackUrl.isEmpty()) {
+			return codeFallbackUrl;
+		}
+
+		// Priority 2 & 3: Configuration-based (handles both controller-specific and global)
+		return mockApiConfiguration.getFallbackUrlForController(getControllerName());
+	}
+
+	/**
+	 * Proxies the request to the fallback endpoint.
+	 */
+	private Mono<ResponseEntity<Object>> proxyToFallback(
+			ServerHttpRequest request,
+			String requestPath,
+			String httpMethod,
+			MultiValueMap<String, String> queryParams,
+			String requestBody) {
+
+		String fallbackUrl = getEffectiveFallbackUrl();
+		String targetUrl = fallbackUrl + requestPath;
+
+		log.info("[{}] Proxying request to fallback: {} {}", getBasePath(), httpMethod, targetUrl);
+
+		// Build WebClient request
+		WebClient.RequestBodySpec requestSpec = webClient
+				.method(org.springframework.http.HttpMethod.valueOf(httpMethod))
+				.uri(uriBuilder -> {
+					uriBuilder.scheme(null).host(null).port(-1).path(targetUrl);
+					if (queryParams != null && !queryParams.isEmpty()) {
+						queryParams.forEach(uriBuilder::queryParam);
+					}
+					return uriBuilder.build();
+				});
+
+		// Forward headers if configured
+		if (mockApiConfiguration != null && mockApiConfiguration.getFallback().isForwardHeaders()) {
+			HttpHeaders headers = request.getHeaders();
+			headers.forEach((name, values) -> {
+				// Skip certain headers that should not be forwarded
+				if (!name.equalsIgnoreCase("host") && !name.equalsIgnoreCase("content-length")) {
+					requestSpec.header(name, values.toArray(new String[0]));
+				}
+			});
+		}
+
+		// Add request body for non-GET requests
+		if (requestBody != null && !httpMethod.equalsIgnoreCase("GET")) {
+			requestSpec.bodyValue(requestBody);
+		}
+
+		// Execute request and handle response
+		return requestSpec
+				.retrieve()
+				.toEntity(Object.class)
+				.doOnSuccess(response -> log.debug("[{}] Fallback request succeeded with status: {}",
+						getBasePath(), response.getStatusCode()))
+				.doOnError(error -> log.error("[{}] Fallback request failed: {}",
+						getBasePath(), error.getMessage()))
+				.onErrorResume(error -> {
+					log.error("[{}] Error proxying to fallback endpoint: {}", getBasePath(), error.getMessage());
+					return Mono.just(ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+							.body(Map.of(
+									"error", "Fallback endpoint error",
+									"message", error.getMessage(),
+									"path", requestPath
+							)));
+				});
 	}
 }

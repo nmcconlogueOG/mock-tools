@@ -12,6 +12,15 @@
         {
           "path": "",
           "httpMethod": "GET",
+          "returnId": "inStockProducts",
+          "statusCode": 200,
+          "queryParameters": {
+            "inStock": "true"
+          }
+        },
+        {
+          "path": "",
+          "httpMethod": "GET",
           "returnId": "productList",
           "statusCode": 200
         },
@@ -38,15 +47,6 @@
           "httpMethod": "GET",
           "returnId": "productsByCategory",
           "statusCode": 200
-        },
-        {
-          "path": "",
-          "httpMethod": "GET",
-          "returnId": "inStockProducts",
-          "statusCode": 200,
-          "queryParameters": {
-            "inStock": "true"
-          }
         }
       ]
     }
@@ -196,6 +196,14 @@
           "description": "RGB mechanical keyboard",
           "price": 149.99,
           "category": "Accessories",
+          "inStock": true
+        },
+        {
+          "id": 105,
+          "name": "Webcam",
+          "description": "HD webcam for video calls",
+          "price": 79.99,
+          "category": "Electronics",
           "inStock": true
         }
       ]
