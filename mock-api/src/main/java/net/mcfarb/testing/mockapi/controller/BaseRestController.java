@@ -1,5 +1,7 @@
 package net.mcfarb.testing.mockapi.controller;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.http.HttpRequest;
 import java.text.DateFormat;
 import java.text.ParseException;
@@ -125,8 +127,16 @@ public abstract class BaseRestController {
 			log.info("[{}] Initialized successfully with {} mock objects",
 					getBasePath(), mockRestProvider.getObjectMap().size());
 
-			if (isFallbackEnabled() && !getEffectiveFallbackUrl().contains(":")){
-				throw new ParseException(getBasePath()+" falback url must include scheme", 0);
+			// Validate fallback URL if enabled
+			if (isFallbackEnabled()) {
+				try {
+					URI fallbackUri = new URI(getEffectiveFallbackUrl());
+					if (fallbackUri.getScheme() == null || fallbackUri.getHost() == null) {
+						throw new ParseException(getBasePath() + " fallback url must include scheme and host", 0);
+					}
+				} catch (URISyntaxException e) {
+					throw new ParseException(getBasePath() + " fallback url is invalid: " + e.getMessage(), 0);
+				}
 			}
 
 		} catch (Exception e) {
@@ -267,10 +277,22 @@ public abstract class BaseRestController {
 		String fallbackUrl = getEffectiveFallbackUrl();
 		String targetUrl = fallbackUrl + requestPath;
 
-		String [] urlParts =fallbackUrl.split(":");
-		String scheme = urlParts[0];
-		String host = urlParts[1].substring(2);
-		String port=(urlParts.length>2)? urlParts[2]:null;
+		// Parse fallback URL properly using URI
+		URI fallbackUri;
+		try {
+			fallbackUri = new URI(fallbackUrl);
+		} catch (URISyntaxException e) {
+			log.error("[{}] Invalid fallback URL: {}", getBasePath(), fallbackUrl, e);
+			return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+					.body(Map.of(
+							"error", "Invalid fallback URL configuration",
+							"message", e.getMessage()
+					)));
+		}
+
+		String scheme = fallbackUri.getScheme();
+		String host = fallbackUri.getHost();
+		String port = fallbackUri.getPort() > 0 ? String.valueOf(fallbackUri.getPort()) : null;
 
 		log.info("[{}] Proxying request to fallback: {} {}", getBasePath(), httpMethod, targetUrl);
 
